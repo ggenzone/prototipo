@@ -1,54 +1,50 @@
 ---
 layout: post
-title:  "Transmitiendo UART sin Serial"
+title:  "UART por software en Arduino Mega"
 date:   2025-04-05 18:30:00 +0000
 categories: [electronica, experimentos]
 tags: [UART, bitbanging, serial]
 ---
 
-> ⚡️ Entender UART desde adentro: bit a bit, sin magia.
 
-Este experimento busca **transmitir datos vía UART sin usar la librería Serial de Arduino**. En lugar de delegar la comunicación a una abstracción, vamos a **generar la señal UART manualmente** con código, usando `digitalWrite()` y `delayMicroseconds()`.
+## UART por software (bit banging)
 
----
-
-## 🎯 Objetivo
-
-Transmitir un byte vía UART desde un pin digital, con formato `9600 8N1`, y **leerlo desde el Monitor Serial del IDE** mediante un adaptador USB-TTL o el propio puerto USB del Arduino.
+En este experimento, exploramos cómo **transmitir datos en serie utilizando un pin digital común (sin usar la librería `Serial`)** y cómo leer esa transmisión en otro UART disponible del **Arduino Mega**. La técnica utilizada se conoce como _bit banging_ y permite generar una señal UART "a mano", controlando el tiempo de cada bit directamente.
 
 ---
 
-## ⚙️ Materiales
+## 🧪 Objetivo
 
-- Arduino UNO o similar
-- Cable USB
-- (Opcional) Adaptador USB–Serial (FTDI, CH340, etc)
-- Cable jumper para conectar TX manual
+Transmitir un mensaje desde un pin digital (`pin 8`) generando una señal UART manualmente y recibirlo en el **pin 19 (RX1)** del **Arduino Mega**, utilizando `Serial1`.
 
 ---
 
-## 🔌 Diagrama de conexión
+## 🔌 Conexión
 
-Conectamos el **pin digital 8 (TX manual)** al pin **RX del adaptador USB–Serial** (o al RX del Arduino si tiene otro puerto serie disponible).
+| Arduino Mega      | Conecta a              |
+| ----------------- | ---------------------- |
+| Pin 8 (TX manual) | Pin 19 (RX1 - Serial1) |
+| GND               | GND                    |
 
-```
-Arduino        ↘
-Pin 8 (TX)  --->  RX del adaptador USB–Serial
-GND          --->  GND
-```
-
-> 💡 No conectes este pin al RX de la misma placa si estás usando el puerto USB, puede haber conflicto con el Serial hardware.
+> 🛠️ **Opcional:** Se puede colocar una **resistencia de 1kΩ en serie** entre pin 8 y pin 19 para limitar corriente en caso de conflicto de estados. No es estrictamente necesaria si ambos pines están bien configurados.
 
 ---
 
-## 💻 Código: bit banging UART
+## 📦 Código
 
 ```cpp
-const int txPin = 8; // Pin de transmisión UART "manual"
+// CONFIGURACIÓN DE VELOCIDAD Y TIEMPO DE BIT
+const long BAUD_RATE = 4800;         // Opciones: 9600, 4800, 2400...
+const int BIT_DURATION = 208;        // en microsegundos: 104 p/9600, 208 p/4800
+
+const int TX_PIN = 8;
 
 void setup() {
-  pinMode(txPin, OUTPUT);
-  digitalWrite(txPin, HIGH); // Línea en reposo
+  pinMode(TX_PIN, OUTPUT);
+  digitalWrite(TX_PIN, HIGH); // Línea en reposo
+
+  Serial.begin(9600);          // Debug por USB
+  Serial1.begin(BAUD_RATE);    // RX1 en Mega (pin 19)
 }
 
 void loop() {
@@ -57,36 +53,69 @@ void loop() {
   sendByte('l');
   sendByte('a');
   sendByte('\n');
+
   delay(1000);
+
+  // Mostrar lo recibido por Serial1 (pin 19)
+  while (Serial1.available()) {
+    char c = Serial1.read();
+    Serial.print("Recibido: ");
+    Serial.println(c);
+  }
 }
 
-// Enviar un byte en formato UART 8N1 a 9600 baudios
+/* Transmite un byte por UART usando bit banging
+ * 
+ * Estructura UART típica:
+ * [START] [ D0 D1 D2 D3 D4 D5 D6 D7 ] [STOP]
+ *    ↓            ↓ datos ↓             ↓
+ *    0     b bits del dato (LSB primero) 1
+ *    
+ * Ejemplo si 'H' (0x48 = 01001000):
+ * TX → __|‾|_|‾‾|_|_|_|‾|‾‾‾‾‾‾ (cada segmento dura BIT_DURATION µs)
+ * No usamos bit de paridad
+ * */
 void sendByte(byte b) {
-  const int bitDuration = 104; // microsegundos para 9600 baudios
+  digitalWrite(TX_PIN, LOW); // bit de start
+  delayMicroseconds(BIT_DURATION);
 
-  digitalWrite(txPin, LOW); // Start bit
-  delayMicroseconds(bitDuration);
-
-  // Enviar bits de datos (LSB primero)
   for (int i = 0; i < 8; i++) {
-    bool bit = (b >> i) & 0x01;
-    digitalWrite(txPin, bit);
-    delayMicroseconds(bitDuration);
+    digitalWrite(TX_PIN, (b >> i) & 0x01);
+    delayMicroseconds(BIT_DURATION);
   }
 
-  digitalWrite(txPin, HIGH); // Stop bit
-  delayMicroseconds(bitDuration);
+  digitalWrite(TX_PIN, HIGH); // bit de stop
+  delayMicroseconds(BIT_DURATION);
 }
 ```
 
 ---
 
-## 🧪 Lectura desde el monitor serial
+## 🧠 Problemas comunes y cómo resolverlos
 
-1. Conectá el pin **TX manual** al **RX del adaptador USB–Serial**
-2. Abrí el Monitor Serial del Arduino IDE
-3. Configurá la velocidad a **9600 baudios**
-4. Deberías ver la palabra **“Hola”** cada segundo
+### ❌ Carácter ilegible o ruido (`⸮`, `ÿ`, etc.)
+
+Si ves símbolos extraños en el monitor serial, probablemente se deba a **errores de sincronización temporal**. El UART no tiene reloj, por lo tanto:
+
+- Cada bit debe durar exactamente el mismo tiempo
+- El receptor asume la posición de los bits basándose en ese tiempo
+
+### 🔧 Sugerencias
+
+- Probá distintos valores de `BIT_DURATION` (por ejemplo, 100, 104, 106).
+- Bajá la velocidad a 4800 o incluso 2400 baudios si sigue fallando.
+- Usá cables cortos y conexión directa para evitar ruido.
+- Probá transmitir letras simples como `'A'`, `'H'`, o `'U'`, que tienen patrones de bits reconocibles para testear estabilidad.
+
+---
+
+## 📊 Tabla de referencia
+
+| Velocidad (baudios) | Tiempo por bit (µs) |
+| ------------------- | ------------------- |
+| 9600                | 104                 |
+| 4800                | 208                 |
+| 2400                | 416                 |
 
 ---
 
@@ -107,15 +136,8 @@ void sendByte(byte b) {
 
 ---
 
-## 📦 Próximos pasos
+## 🎯 Conclusión
 
-- Recepción UART por software (más complejo, pero posible)
-- Ver la señal en un osciloscopio o analizador lógico
-- Implementar un protocolo propio sobre UART
+Este experimento muestra que es posible **transmitir datos en serie sin usar las funciones UART del Arduino**, lo cual puede ser útil en casos donde el hardware está ocupado o se desea entender el protocolo en profundidad.
 
----
-
-> 🧠 **Aprender a enviar un byte manualmente es entender realmente qué pasa cuando usás `Serial.print()`.** Todo está hecho de ceros, unos… y paciencia.
-```
-
----
+El **Arduino Mega** facilita mucho las cosas al contar con múltiples puertos UART reales, evitando conflictos con el USB (como ocurre en el UNO con los pines 0 y 1).
